@@ -35,6 +35,7 @@ type hookInput struct {
 	ToolInput      map[string]any `json:"tool_input"`
 	CWD            string         `json:"cwd"`
 	TranscriptPath string         `json:"transcript_path"`
+	Goal           string         `json:"goal"`
 }
 
 type hookOutput struct {
@@ -115,9 +116,15 @@ func Hook(args []string) error {
 			len(data)/1024, maxSectionBytes/1024))
 	}
 
-	goal := lastUserMessage(in.TranscriptPath)
+	goal := strings.TrimSpace(in.Goal)
+	if goal == "" {
+		goal = lastUserMessage(in.TranscriptPath)
+	}
+	if len(goal) > 600 {
+		goal = goal[:600]
+	}
 	if len(goal) < 12 {
-		return passThrough("no goal found in the transcript")
+		return passThrough("no goal found")
 	}
 
 	client, err := typesafe.New()

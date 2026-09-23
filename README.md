@@ -2,9 +2,10 @@
 
 **Answer questions about a codebase without reading it into the agent's context.**
 
-A Claude Code plugin backed by [TypeSafe](https://typesafe.ai)'s Jev — a small
-model that returns calibrated probabilities instead of prose, at $0.042 per
-million tokens. It reads your files so the agent doesn't have to.
+A Claude Code plugin backed by [TypeSafe](https://typesafe.ai)'s Jev through
+OpenRouter — a small model that returns calibrated probabilities instead of
+prose, at $0.042 per million input tokens. It reads your files so the agent
+doesn't have to.
 
 ![jev intercepting a Claude Code session](docs/demo.gif)
 
@@ -29,18 +30,21 @@ That repository contains the string `register` **zero times**. The flow is calle
 
 ## Install
 
-Needs Go 1.22+ and a [TypeSafe API key](https://typesafe.ai).
+Needs Go 1.22+ and an [OpenRouter API key](https://openrouter.ai/settings/keys).
 
 ```bash
-claude plugin marketplace add BorisLeMeec/jev
+claude plugin marketplace add cheboxarov/jev
 claude plugin install jev@jev
 ```
 
 Then, once:
 
 ```bash
-export TYPE_SAFE_AI_KEY=...   # put this in your shell profile
+export OPENROUTER_API_KEY=...   # put this in your shell profile
 ```
+
+A TypeSafe key still works: set `TYPE_SAFE_AI_KEY` instead. OpenRouter wins if
+both are set.
 
 To use `jev` from your own terminal too (the plugin only puts it on `PATH`
 inside Claude Code):
@@ -49,6 +53,17 @@ inside Claude Code):
 make install    # builds and copies to ~/.local/bin/jev
 jev probe       # verify the API contract, prints raw + decoded response
 ```
+
+### omp
+
+```bash
+omp plugin marketplace add cheboxarov/jev
+omp plugin install jev@jev
+make omp-sync
+```
+
+`make omp-sync` builds the binary into the installed omp plugin cache, because
+omp marketplace installs copy only tracked files.
 
 ## Why
 

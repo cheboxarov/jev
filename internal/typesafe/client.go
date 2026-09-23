@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -20,30 +21,40 @@ import (
 )
 
 const (
-	endpoint     = "https://api.typesafe.ai/v1/systemone"
-	DefaultModel = "jev-latest"
+	typeSafeEndpoint   = "https://api.typesafe.ai/v1/systemone"
+	openRouterEndpoint = "https://openrouter.ai/api/v1/systemone"
+	DefaultModel       = "jev-latest"
 )
 
-// Key reads the API key. TYPE_SAFE_AI_KEY is the name used in this project's
-// setup; the others are what the official SDKs look for, accepted so a machine
-// that already has one configured works without extra setup.
-func Key() (string, error) {
+type provider struct {
+	name     string
+	endpoint string
+	keyEnv   string
+	key      string
+}
+
+func providerFromEnv() (provider, error) {
+	if k := strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")); k != "" {
+		return provider{name: "OpenRouter", endpoint: openRouterEndpoint, keyEnv: "OPENROUTER_API_KEY", key: k}, nil
+	}
 	for _, name := range []string{"TYPE_SAFE_AI_KEY", "TYPESAFE_API_KEY", "TYPESAFE_AI_API_KEY"} {
-		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-			return v, nil
+		if k := strings.TrimSpace(os.Getenv(name)); k != "" {
+			return provider{name: "TypeSafe", endpoint: typeSafeEndpoint, keyEnv: name, key: k}, nil
 		}
 	}
-	return "", fmt.Errorf("no API key: set TYPE_SAFE_AI_KEY in your environment")
+	return provider{}, fmt.Errorf("no API key: set OPENROUTER_API_KEY (or TYPE_SAFE_AI_KEY) in your environment")
 }
 
 type Client struct {
-	key   string
-	model string
-	http  *http.Client
+	key          string
+	model        string
+	endpoint     string
+	providerName string
+	keyEnv       string
+	http         *http.Client
 
-	// The service allows 1200 requests per minute. One request per file means a
-	// large tree can reach that, so requests are spaced rather than left to
-	// collide and retry.
+	// One request per file can reach provider rate limits, so requests are
+	// spaced rather than left to collide and retry.
 	mu          sync.Mutex
 	next        time.Time
 	minInterval time.Duration
@@ -55,7 +66,7 @@ type Client struct {
 }
 
 func New() (*Client, error) {
-	k, err := Key()
+	p, err := providerFromEnv()
 	if err != nil {
 		return nil, err
 	}
@@ -64,10 +75,13 @@ func New() (*Client, error) {
 		model = m
 	}
 	return &Client{
-		key:         k,
-		model:       model,
-		http:        &http.Client{Timeout: 120 * time.Second},
-		minInterval: time.Minute / 1000,
+		key:          p.key,
+		model:        model,
+		endpoint:     p.endpoint,
+		providerName: p.name,
+		keyEnv:       p.keyEnv,
+		http:         &http.Client{Timeout: 120 * time.Second},
+		minInterval:  time.Minute / 1000,
 	}, nil
 }
 
@@ -141,21 +155,23 @@ type Response struct {
 // --- transport ---------------------------------------------------------
 
 type apiError struct {
-	status int
-	body   string
+	status   int
+	body     string
+	provider string
+	keyEnv   string
 }
 
 func (e *apiError) Error() string {
 	switch e.status {
 	case http.StatusUnauthorized:
-		return "401 unauthorized: the API key was rejected (check TYPE_SAFE_AI_KEY)"
+		return fmt.Sprintf("401 unauthorized: the API key was rejected (check %s)", e.keyEnv)
+	case http.StatusPaymentRequired:
+		return "402 payment required: the account has insufficient credits for this request"
 	case http.StatusUnprocessableEntity:
 		return fmt.Sprintf("422 the request was malformed: %s", e.body)
 	case http.StatusServiceUnavailable:
 		if strings.Contains(e.body, "model_unavailable") {
-			return "503 model_unavailable: TypeSafe reports the model is down. " +
-				"This is on their side — the key and the request are fine. Retry later, " +
-				"or check status with: curl -H \"Authorization: Bearer $TYPE_SAFE_AI_KEY\" https://api.typesafe.ai/v1/models"
+			return fmt.Sprintf("503 model_unavailable: %s reports the model is down. The key and the request are fine. Retry later.", e.provider)
 		}
 	}
 	return fmt.Sprintf("HTTP %d: %s", e.status, e.body)
@@ -165,7 +181,7 @@ func (e *apiError) Error() string {
 // from the API. Callers use it to tailor advice to the actual failure.
 func StatusOf(err error) int {
 	var ae *apiError
-	if errorsAs(err, &ae) {
+	if errors.As(err, &ae) {
 		return ae.status
 	}
 	return 0
@@ -206,7 +222,7 @@ func (c *Client) Ask(ctx context.Context, state any, questions map[string]Questi
 		}
 		lastErr = err
 		var ae *apiError
-		if !errorsAs(err, &ae) || !ae.retryable() {
+		if !errors.As(err, &ae) || !ae.retryable() {
 			return nil, err
 		}
 	}
@@ -240,7 +256,7 @@ func (c *Client) do(ctx context.Context, body []byte) (*Response, error) {
 	if err := c.reserve(ctx); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +265,7 @@ func (c *Client) do(ctx context.Context, body []byte) (*Response, error) {
 
 	httpResp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("calling TypeSafe: %w", err)
+		return nil, fmt.Errorf("calling %s: %w", c.providerName, err)
 	}
 	defer httpResp.Body.Close()
 
@@ -258,10 +274,10 @@ func (c *Client) do(ctx context.Context, body []byte) (*Response, error) {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 	if c.Debug != nil {
-		fmt.Fprintf(c.Debug, "--- POST %s -> %d ---\n%s\n", endpoint, httpResp.StatusCode, raw)
+		fmt.Fprintf(c.Debug, "--- POST %s -> %d ---\n%s\n", c.endpoint, httpResp.StatusCode, raw)
 	}
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, &apiError{status: httpResp.StatusCode, body: truncate(string(raw), 400)}
+		return nil, &apiError{status: httpResp.StatusCode, body: truncate(string(raw), 400), provider: c.providerName, keyEnv: c.keyEnv}
 	}
 
 	var out Response
@@ -276,21 +292,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
-}
-
-// errorsAs is errors.As, kept local so this file has no dependency beyond the
-// standard library's encoding and net packages.
-func errorsAs(err error, target **apiError) bool {
-	for err != nil {
-		if ae, ok := err.(*apiError); ok {
-			*target = ae
-			return true
-		}
-		u, ok := err.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
-	}
-	return false
 }

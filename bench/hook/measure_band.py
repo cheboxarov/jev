@@ -12,7 +12,7 @@ import json, os, statistics, sys, urllib.request
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
-KEY = os.environ["TYPE_SAFE_AI_KEY"]
+KEY = os.environ["OPENROUTER_API_KEY"]
 LOC = ("Which numbered chunk of `file.chunks` contains the part of this file that most directly "
        "implements what `goal` describes? Each chunk is a run of consecutive lines from the file "
        "at `file.path`.")
@@ -34,7 +34,7 @@ def locate(c):
     body = {"model": "jev-latest",
             "state": {"goal": c["goal"], "file": {"path": c["file"], "chunks": chunks}},
             "questions": {"where": {"type": "choice", "instructions": LOC, "criteria": crit}}}
-    req = urllib.request.Request("https://api.typesafe.ai/v1/systemone",
+    req = urllib.request.Request("https://openrouter.ai/api/v1/systemone",
                                  data=json.dumps(body).encode(),
                                  headers={"Authorization": f"Bearer {KEY}",
                                           "Content-Type": "application/json"})

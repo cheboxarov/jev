@@ -7,7 +7,8 @@ description: >
   the request ("where is the register flow", "which files touch rate limiting"),
   when a grep returned nothing useful, or when checking a property across many
   files would otherwise mean reading all of them. Backed by the TypeSafe Jev
-  model at $0.042 per million tokens; it reads the files so the agent does not.
+  model through OpenRouter at $0.042 per million input tokens; it reads the files
+  so the agent does not.
 ---
 
 # jev — ask about code without reading it
@@ -130,8 +131,9 @@ is never second-guessed. Measured: 50 narrowed windows, none lost its target.
 
 ## Setup
 
-Needs `TYPE_SAFE_AI_KEY` in the environment. If a command reports a missing key,
-tell the user rather than falling back to reading every file silently.
+Needs `OPENROUTER_API_KEY` in the environment (a `TYPE_SAFE_AI_KEY` also works).
+If a command reports a missing key, tell the user rather than falling back to
+reading every file silently.
 
 Run `jev probe` once after installing to confirm the API contract, and
 `jev scan` to see what a search would send and cost without sending it.
